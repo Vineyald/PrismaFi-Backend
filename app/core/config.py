@@ -7,7 +7,10 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     """Application settings, read from environment variables and an optional `.env` file."""
 
-    model_config = SettingsConfigDict(env_file=".env", env_ignore_empty=True, extra="ignore")
+    # hide_input_in_errors: a malformed URL must not echo its credentials into startup logs.
+    model_config = SettingsConfigDict(
+        env_file=".env", env_ignore_empty=True, extra="ignore", hide_input_in_errors=True
+    )
 
     # Fails closed: a deploy that forgets ENVIRONMENT gets production behavior (no docs).
     environment: Literal["development", "production"] = "production"
