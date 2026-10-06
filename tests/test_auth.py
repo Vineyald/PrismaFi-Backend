@@ -127,3 +127,14 @@ def test_login_with_unknown_email_still_verifies_a_hash(
 
     assert response.status_code == 401
     assert len(calls) == 1
+
+
+def test_validation_errors_do_not_echo_submitted_values(client: TestClient) -> None:
+    secret = "my secret password " * 10  # over the 128-character limit
+
+    response = client.post(LOGIN, json={"email": "ana@example.com", "password": secret})
+
+    assert response.status_code == 422
+    assert response.headers["cache-control"] == "no-store"
+    assert "my secret password" not in response.text
+    assert response.json()["detail"][0]["loc"] == ["body", "password"]

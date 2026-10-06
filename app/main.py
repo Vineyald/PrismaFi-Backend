@@ -3,6 +3,8 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
@@ -45,6 +47,18 @@ if settings.cors_origins:
         allow_origins=settings.cors_origins,
         allow_methods=["*"],
         allow_headers=["*"],
+    )
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(_: Request, exc: RequestValidationError) -> JSONResponse:
+    # FastAPI's default 422 shape minus `input` and `ctx`: they echo submitted values,
+    # passwords included, into response bodies that proxies and devtools may record.
+    errors = [{"loc": e["loc"], "msg": e["msg"], "type": e["type"]} for e in exc.errors()]
+    return JSONResponse(
+        status_code=422,
+        content=jsonable_encoder({"detail": errors}),
+        headers={"Cache-Control": "no-store"},
     )
 
 
