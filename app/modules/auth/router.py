@@ -29,13 +29,13 @@ async def register(data: RegisterRequest, session: SessionDep) -> Response:
     "/login",
     responses={status.HTTP_401_UNAUTHORIZED: {"model": ErrorResponse}},
 )
-async def login(data: LoginRequest, session: SessionDep, response: Response) -> TokenResponse:
+async def login(data: LoginRequest, response: Response) -> TokenResponse:
     """Exchange email and password for a short-lived access token.
 
     Unknown email and wrong password return the same 401.
     """
     try:
-        token = await service.login(session, data)
+        token = await service.login(data)
     except service.InvalidCredentialsError:
         raise HTTPException(
             status.HTTP_401_UNAUTHORIZED,
