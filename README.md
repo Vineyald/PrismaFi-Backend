@@ -4,7 +4,7 @@ API do PrismaFi, construída como um **monólito modular** em FastAPI.
 
 O PrismaFi é um SaaS financeiro que dá ao usuário uma visão centralizada da sua vida financeira. Ele vai reunir instituições conectadas via Open Finance, contas bancárias, saldos, transações e contas a pagar, além da iniciação de pagamentos. O PrismaFi **orquestra a experiência**; a operação financeira em si é executada por infraestrutura regulada (provedor de Open Finance / iniciação de pagamento). O PrismaFi **nunca recebe nem repassa o dinheiro do usuário**.
 
-Hoje este repositório contém apenas a fundação técnica: configuração, PostgreSQL, Redis, broker de jobs em background e um endpoint de health check. Ainda não há funcionalidades de produto (veja o [Roadmap até o MVP](#roadmap-até-o-mvp)).
+Hoje este repositório contém a fundação técnica (configuração, PostgreSQL, Redis, broker de jobs em background, health check e CI) e o começo da Fase 1: cadastro e login (veja o [Roadmap até o MVP](#roadmap-até-o-mvp)).
 
 O frontend fica em um repositório separado (`PrismaFi-Frontend`). Os dois se integram **somente** via HTTP e pelo schema OpenAPI publicado aqui.
 
@@ -49,18 +49,28 @@ PrismaFi-Backend/
 ├── app/
 │   ├── core/              # Infraestrutura compartilhada por todos os módulos
 │   │   ├── config.py      # Settings (variáveis de ambiente / .env), validadas na inicialização
-│   │   ├── database.py    # Engine async + Base declarativa com convenção de nomes de constraints
+│   │   ├── database.py    # Engine async, Base declarativa, SessionLocal e SessionDep
 │   │   ├── redis.py       # Cliente Redis async compartilhado
 │   │   └── broker.py      # Broker Redis do Dramatiq
+│   ├── modules/
+│   │   ├── users/
+│   │   │   └── models.py  # User (e-mail normalizado e único, hash de senha, fuso IANA)
+│   │   └── auth/
+│   │       ├── router.py  # POST /api/v1/auth/register e /login
+│   │       ├── schemas.py # Requests/responses e regras de entrada
+│   │       └── service.py # Cadastro, login, Argon2id e access token
 │   ├── health.py          # GET /api/health (readiness: banco + Redis)
-│   └── main.py            # Montagem da aplicação: routers, CORS, handler de erros, lifespan
+│   └── main.py            # Montagem da aplicação: routers, CORS, handlers de erro, lifespan
 ├── migrations/
 │   ├── env.py             # Ambiente do Alembic: usa as settings da aplicação e Base.metadata
 │   ├── script.py.mako     # Template de revisão
-│   └── versions/          # Revisões (nenhuma ainda)
+│   └── versions/          # Revisões (tabela users)
 ├── tests/
-│   ├── conftest.py        # Força settings de teste, independentes do seu .env
+│   ├── conftest.py        # Settings de teste, banco de teste migrado e limpo por teste
+│   ├── test_auth.py
+│   ├── test_config.py
 │   └── test_health.py
+├── .github/workflows/ci.yml  # CI: ruff, ruff format --check, mypy, pytest (com PostgreSQL)
 ├── .env.example
 ├── alembic.ini
 ├── docker-compose.yml
@@ -75,7 +85,7 @@ PrismaFi-Backend/
 - Os domínios de negócio (`users`, `auth`, `accounts`, `transactions`, `obligations`, `payments`, …) vão ficar em `app/modules/<nome>/`. Cada módulo tem seu `router.py`, `schemas.py` (Pydantic), `models.py` (SQLAlchemy) e `service.py` (regras de negócio), e ganha um `tasks.py` com actors do Dramatiq só quando precisar. Routes ficam finas; a lógica de negócio fica no service. Uma camada de repository só entra se eliminar duplicação ou complexidade real.
 - Integrações externas (ex.: o provedor de Open Finance) ficam isoladas em `app/integrations/<provedor>/`: funções que chamam o provedor e já devolvem tipos do PrismaFi. Payloads específicos do provedor nunca circulam pelo domínio. Uma interface abstrata (`Protocol`) só entra quando houver um segundo provedor.
 - Dependências entre módulos têm direção única. Ex.: `payments` chama o service de `obligations` para marcar uma obrigação como paga; `obligations` nunca importa `payments`.
-- **Nenhuma dessas pastas existe ainda, de propósito.** Não criamos arquitetura vazia para código hipotético: `app/modules/` nasce com o primeiro domínio real.
+- Hoje existem `users` (só o model; o service nasce com o primeiro endpoint de usuário, e então `auth` passa a chamá-lo para criar e buscar usuários) e `auth`. As demais pastas nascem com o primeiro código real: não criamos arquitetura vazia para código hipotético.
 
 **Layout da API**
 
@@ -84,7 +94,7 @@ Tudo é servido sob `/api`, para que o frontend acesse a API por um único camin
 | Caminho | Finalidade |
 |---|---|
 | `/api/health` | Health check sem versão, para probes de infraestrutura |
-| `/api/v1/...` | Endpoints de negócio (versionados); nenhum ainda |
+| `/api/v1/...` | Endpoints de negócio (versionados). Hoje: `/api/v1/auth/register` e `/api/v1/auth/login` |
 | `/api/docs`, `/api/redoc`, `/api/openapi.json` | Documentação da API (somente em desenvolvimento) |
 
 ## Configuração do ambiente
@@ -98,6 +108,8 @@ cd PrismaFi-Backend
 
 # 2. Variáveis de ambiente
 cp .env.example .env            # ajuste os valores se precisar
+# Preencha JWT_SECRET (obrigatório):
+python -c "import secrets; print(secrets.token_urlsafe(48))"
 
 # 3. Dependências Python (para testes, lint, IDE e comandos rodados no host)
 python -m venv .venv            # Windows: py -3 -m venv .venv
@@ -125,11 +137,17 @@ uvicorn app.main:app --reload
 **Testes e qualidade**
 
 ```bash
+# Banco descartável para os testes que usam banco (uma vez):
+docker compose exec db createdb -U prismafi prismafi_test
+export TEST_DATABASE_URL=postgresql+asyncpg://prismafi:<senha>@127.0.0.1:5432/prismafi_test
+
 pytest
 ruff check .
 ruff format --check .
 mypy app migrations tests
 ```
+
+Sem `TEST_DATABASE_URL`, os testes que usam banco são pulados localmente e falham no CI. No Windows, use `127.0.0.1` e não `localhost`: o `localhost` tenta IPv6 primeiro e cada conexão demora cerca de 2s.
 
 ## Variáveis de ambiente
 
@@ -144,7 +162,9 @@ Todas estão definidas no `.env.example`. As settings são validadas na iniciali
 | `POSTGRES_DB` | compose | — | Nome do banco. |
 | `DATABASE_URL` | **sim** | — | `postgresql+asyncpg://user:pass@host:5432/db`. No `.env` aponta para `localhost`, para comandos rodados no host, e precisa bater com os valores `POSTGRES_*`. O Compose troca o host para `db` dentro dos containers. |
 | `REDIS_URL` | **sim** | — | `redis://host:6379/0`. O Compose troca o host para `redis`. |
+| `JWT_SECRET` | **sim** | — | Segredo que assina os access tokens (HS256), com pelo menos 32 caracteres. Gere com `python -c "import secrets; print(secrets.token_urlsafe(48))"`. Trocar o valor invalida todos os tokens emitidos. |
 | `CORS_ORIGINS` | não | `[]` | Lista JSON de origens de navegador permitidas, ex.: `["https://app.example.com"]`. Vazia desativa o CORS, o que é o correto enquanto o frontend estiver na mesma origem. |
+| `TEST_DATABASE_URL` | só testes | — | Banco descartável dos testes que usam banco. Ele é migrado (subida, descida e subida) e limpo a cada teste. Nunca aponte para um banco com dados. |
 
 Valores vazios (`VAR=`) caem no padrão. Segredos reais nunca entram no repositório: `.env`, `.env.*`, `*.pem`, `*.key` e `*.p12` estão no `.gitignore` e no `.dockerignore`.
 
@@ -153,8 +173,9 @@ Valores vazios (`VAR=`) caem no padrão. Segredos reais nunca entram no reposit�
 - **PostgreSQL 18** roda no Docker Compose, com os dados no volume `postgres-data`. A porta é publicada só em `127.0.0.1:5432`.
 - **SQLAlchemy 2 async**: `app/core/database.py` expõe o `engine` e a `Base` declarativa.
   - `Base.metadata` tem uma **convenção de nomes** para índices e constraints, para o Alembic conseguir alterá-los e removê-los de forma confiável.
-  - O engine usa `hide_parameters=True`, que omite os parâmetros bindados (valores monetários, identificadores, tokens) das mensagens do SQLAlchemy. Atenção: mensagens geradas pelo próprio PostgreSQL (como o `DETAIL` de uma violação de unique constraint: `Key (email)=(...) already exists`) ainda podem conter valores. Por isso, services capturam `IntegrityError` e o convertem em erro de domínio, e o texto bruto de exceções do banco nunca é logado.
-  - A session factory e a dependency `get_session` entram aqui junto com o primeiro model. Nada precisa delas ainda.
+  - O engine usa `hide_parameters=True`, que omite os parâmetros bindados (valores monetários, identificadores, tokens) das mensagens do SQLAlchemy. Atenção: mensagens geradas pelo próprio PostgreSQL (como o `DETAIL` de uma violação de unique constraint: `Key (email)=(...) already exists`) ainda podem conter valores. Por isso, services evitam ou capturam violações de constraint (o cadastro usa `INSERT ... ON CONFLICT DO NOTHING`; outros casos capturam `IntegrityError` e o convertem em erro de domínio), e o texto bruto de exceções do banco nunca é logado.
+  - `SessionDep` (`Depends(get_session, scope="function")`) dá a cada request uma sessão com uma transação: commit no sucesso, rollback no erro, e o commit acontece **antes** de a resposta ser enviada, para que uma falha no commit vire erro em vez de um sucesso já entregue. Trabalho lento sem banco (ex.: hash de senha) não deve segurar uma conexão: o login busca o usuário numa sessão curta própria (`SessionLocal`) antes de verificar a senha.
+- **Convenções de model**: chave primária UUID, `created_at`/`updated_at` com fuso horário (UTC, `server_default=now()`).
 - O **Alembic** lê a URL das settings da aplicação. O `alembic.ini` não tem credenciais.
 
 **Fluxo de migrations**
@@ -213,6 +234,24 @@ O Dramatiq não tem agendador periódico nativo. Quando surgir o primeiro job ag
 
 Falhas são logadas só pelo tipo da exceção, porque mensagens de driver podem conter detalhes da conexão. Erros não tratados retornam `500 {"detail": "Internal server error"}` sem expor detalhes internos; o traceback vai para o log do servidor.
 
+Erros de validação retornam `422 {"detail": [{"loc": [...], "msg": "...", "type": "..."}]}`, com `Cache-Control: no-store`. Diferente do padrão do FastAPI, a resposta **não** inclui `input` nem `ctx`, porque eles devolveriam o valor enviado (uma senha, por exemplo).
+
+### Autenticação
+
+| Endpoint | Request | Respostas |
+|---|---|---|
+| `POST /api/v1/auth/register` | `{ "name", "email", "password" }` | `202` com corpo vazio · `422` |
+| `POST /api/v1/auth/login` | `{ "email", "password" }` | `200 { "access_token", "token_type": "bearer", "expires_in": 900 }` com `Cache-Control: no-store` · `401 { "detail": "Invalid email or password" }` · `422` |
+
+Regras de entrada: `name` com 1 a 100 caracteres, sem caracteres de controle; `email` válido (cadastro), com espaços removidos e em minúsculas, até 254 caracteres; `password` com 12 a 128 caracteres no cadastro (até 128 no login), normalizada em NFKC antes do hash.
+
+**As respostas não revelam se um e-mail está cadastrado:**
+
+- O cadastro sempre responde `202` vazio. O hash da senha é calculado nos dois casos e o insert é um único `INSERT ... ON CONFLICT DO NOTHING`, então nem a resposta nem o tempo diferem; um cadastro com e-mail já existente não altera a conta.
+- O login responde o mesmo `401` para e-mail desconhecido e senha errada. Para e-mail desconhecido, uma senha é verificada contra um hash fictício, para o tempo ser o mesmo. O e-mail do login não passa pela validação de formato: qualquer e-mail que não consegue entrar recebe o mesmo `401`.
+- Senhas usam Argon2id (`argon2-cffi`, perfil RFC 9106 de baixa memória, 64 MiB por hash). No máximo 4 hashes rodam ao mesmo tempo, fora do event loop.
+- O access token é um JWT HS256 de 15 minutos com `sub` (ID do usuário), `iat` e `exp`. Ele ainda não é consumido por nenhum endpoint. A sessão no banco, o refresh token em cookie e a revogação são as próximas entregas da Fase 1; com elas, o token ganha o ID da sessão (`sid`) e as claims `iss`/`aud`/`typ`.
+
 ## Qualidade
 
 | Ferramenta | Comando | Configuração |
@@ -226,7 +265,12 @@ Os testes atuais cobrem:
 
 - o health check nos estados saudável e com dependência fora do ar (com os pings das dependências simulados);
 - a resposta 500 genérica, que não pode vazar detalhes internos;
-- a documentação e o schema escondidos quando `ENVIRONMENT=production`.
+- a documentação e o schema escondidos quando `ENVIRONMENT=production`;
+- settings inválidas que não vazam credenciais;
+- autenticação (contra PostgreSQL real): cadastro com e-mail normalizado e hash Argon2id; cadastro com e-mail existente indistinguível e sem alterar a conta; validação de entrada (incluindo NUL no nome); token de login com `sub` e validade de 15 minutos; `401` idêntico para senha errada, e-mail desconhecido e e-mail mal formado; verificação de hash também para e-mail desconhecido; 422 sem eco do valor enviado; senhas iguais em formas Unicode diferentes;
+- a reversibilidade das migrations (subida, descida e subida no banco de teste).
+
+O CI (`.github/workflows/ci.yml`) roda `ruff check`, `ruff format --check`, `mypy` e `pytest` com um serviço PostgreSQL em pull requests e em pushes para `dev`, `hml` e `prod`, com token só de leitura.
 
 ## Docker
 
@@ -259,12 +303,15 @@ Obrigatórias para todo código futuro.
 
 - As dependências usam versão mínima (`>=`) sem lock file, então os builds não são totalmente reproduzíveis. Adicionar um lock (ex.: `uv lock` ou `pip-compile --generate-hashes`) antes de CI e produção; planejado para a Fase 1.
 - `/api/health` não exige autenticação e acessa banco e Redis. Antes de um deploy público, aplicar rate limit no reverse proxy ou separá-lo em liveness pública e readiness interna (Fase 9).
+- Login e cadastro ainda não têm rate limit (próxima entrega da Fase 1). **Antes de qualquer deploy público**, eles precisam dele: sem limite, ficam abertos a força bruta e cada request custa um hash Argon2 de 64 MiB (o semáforo de 4 hashes protege a memória, mas não a fila).
+- Sem verificação de e-mail, qualquer pessoa pode cadastrar um e-mail que não é dela antes do dono real (pre-hijacking). A verificação de e-mail da Fase 1 resolve isso.
+- As actions do CI usam tags de versão (`@v7`), não SHAs fixos. Fixar por SHA, com Dependabot para atualizar, junto com o lock file.
 - O serviço `api` do Compose leva cerca de 10s para parar e termina com código 137: o comando roda via `sh -c`, que não repassa o SIGTERM ao uvicorn. Não afeta o funcionamento em desenvolvimento.
 
 ## Roadmap até o MVP
 
-> **Estado atual:** Fundação técnica concluída.\
-> **Próximo marco:** Identidade e autenticação.\
+> **Estado atual:** Fase 1 em andamento (cadastro e login entregues).\
+> **Próximo marco:** Identidade e autenticação (sessões, refresh, logout, rate limit e perfil).\
 > **MVP:** não concluído.
 
 Este roadmap é compartilhado com o `PrismaFi-Frontend`: as fases e os marcos são os mesmos nos dois repositórios. Aqui ficam os itens de **backend** (domínio, API, banco, integrações, workers, segurança, pagamentos e reconciliação). Os itens de interface estão no README do frontend.
@@ -289,7 +336,7 @@ Com eventos de auditoria registrados para as ações financeiras críticas. O MV
 | Fase | Marco | Status |
 |---|---|---|
 | 0 | Fundação técnica | Concluída |
-| 1 | Identidade e autenticação | **Próxima** |
+| 1 | Identidade e autenticação | **Em andamento** |
 | 2 | Shell da aplicação e design system | Planejada |
 | 3 | Integração com provedor de Open Finance | Planejada |
 | 4 | Contas bancárias, saldos e transações | Planejada |
@@ -311,7 +358,7 @@ Com eventos de auditoria registrados para as ações financeiras críticas. O MV
 - [x] Cliente Redis async
 - [x] Broker Dramatiq + serviço `worker` (sem actors ainda)
 - [x] `GET /api/health` (readiness de banco e Redis) e documentação OpenAPI em desenvolvimento
-- [x] Docker Compose (api, worker, PostgreSQL 18, Redis 8): stack executada localmente, `alembic upgrade head` (ainda sem revisões) e `/api/health` retornando 200
+- [x] Docker Compose (api, worker, PostgreSQL 18, Redis 8): stack executada localmente, `alembic upgrade head` e `/api/health` retornando 200
 - [x] Pytest, Ruff e mypy strict
 - [x] Regras financeiras e de segurança documentadas
 
@@ -322,17 +369,17 @@ Com eventos de auditoria registrados para as ações financeiras críticas. O MV
 
 Preparação (antes do primeiro domínio):
 
-- [ ] CI no GitHub Actions: `ruff check`, `ruff format --check`, `mypy`, `pytest`
+- [x] CI no GitHub Actions: `ruff check`, `ruff format --check`, `mypy`, `pytest`
 - [ ] Lock file de dependências usado no Docker e no CI
-- [ ] Convenções de modelo: chaves primárias UUID, `created_at`/`updated_at` com fuso (UTC), session factory e `get_session`, uma transação por request
+- [x] Convenções de modelo: chaves primárias UUID, `created_at`/`updated_at` com fuso (UTC), session factory e `get_session`, uma transação por request
 - [ ] Formato padrão de erro da API (`detail` + código estável) documentado no OpenAPI
 
 Domínio e API:
 
-- [ ] Módulo `users`: model de usuário (com fuso horário IANA), e-mail normalizado (minúsculas, sem espaços) e único no banco. Sessões e tokens pertencem ao módulo `auth`
-- [ ] Hash de senha com Argon2id usando biblioteca consolidada (sem criptografia própria)
-- [ ] `POST /api/v1/auth/register`, `POST /api/v1/auth/login`, `POST /api/v1/auth/refresh`, `POST /api/v1/auth/logout`; os demais fluxos de autenticação (sessões, verificação de e-mail, recuperação de senha) também ficam sob `/api/v1/auth/`
-- [ ] Access token de curta duração (~15 min) enviado no header `Authorization`
+- [x] Módulo `users`: model de usuário (com fuso horário IANA), e-mail normalizado (minúsculas, sem espaços) e único no banco. Sessões e tokens pertencem ao módulo `auth`
+- [x] Hash de senha com Argon2id usando biblioteca consolidada (sem criptografia própria)
+- [ ] `POST /api/v1/auth/register`, `POST /api/v1/auth/login`, `POST /api/v1/auth/refresh`, `POST /api/v1/auth/logout`; os demais fluxos de autenticação (sessões, verificação de e-mail, recuperação de senha) também ficam sob `/api/v1/auth/`. Feitos: `register` e `login`
+- [ ] Access token de curta duração (~15 min) enviado no header `Authorization`. Emitido no login; o consumo (`current_user`) entra com as sessões
 - [ ] Refresh token opaco em cookie `HttpOnly`, `Secure`, `SameSite=Strict`, restrito ao path de auth
 - [ ] Sessões persistidas no banco, com o refresh token guardado só como hash
 - [ ] Rotação do refresh token a cada uso, atômica (`UPDATE ... WHERE token_hash = :antigo AND revoked_at IS NULL RETURNING`). Se o `UPDATE` não encontrar linha, o token é consultado: se foi rotacionado há poucos segundos (janela de tolerância), a requisição é aceita como renovação concorrente da mesma sessão (duas abas ao mesmo tempo) e recebe um novo access token; fora da janela, é reuso e a família de sessões é revogada. O tratamento do cookie nesse caso é definido na implementação
@@ -341,7 +388,7 @@ Domínio e API:
 - [ ] `GET /api/v1/users/me` e atualização do perfil
 - [ ] Dependencies de autenticação (`current_user`) e base de autorização: todo recurso é filtrado pelo dono
 - [ ] Rate limit em login, cadastro, refresh e recuperação de senha (Redis, por IP e por conta)
-- [ ] Respostas que não revelam se um e-mail está cadastrado
+- [x] Respostas que não revelam se um e-mail está cadastrado (cadastro e login; recuperação de senha seguirá a mesma regra)
 - [ ] Tabela de eventos de auditoria de identidade e segurança (append-only, do módulo `auth`): cadastro, login, falha de login, reuso de refresh detectado, logout, troca e recuperação de senha
 - [ ] Envio de e-mail transacional por um provedor externo (função simples no módulo `auth`, sem interface)
 - [ ] Verificação de e-mail e recuperação de senha (tokens de uso único, com expiração e guardados como hash)
