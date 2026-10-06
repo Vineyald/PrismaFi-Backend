@@ -264,7 +264,7 @@ Obrigatórias para todo código futuro.
 ## Roadmap até o MVP
 
 > **Estado atual:** Fundação técnica concluída.\
-> **Próximo marco:** Identidade e Autenticação.\
+> **Próximo marco:** Identidade e autenticação.\
 > **MVP:** não concluído.
 
 Este roadmap é compartilhado com o `PrismaFi-Frontend`: as fases e os marcos são os mesmos nos dois repositórios. Aqui ficam os itens de **backend** (domínio, API, banco, integrações, workers, segurança, pagamentos e reconciliação). Os itens de interface estão no README do frontend.
@@ -331,11 +331,11 @@ Domínio e API:
 
 - [ ] Módulo `users`: model de usuário (com fuso horário IANA), e-mail normalizado (minúsculas, sem espaços) e único no banco. Sessões e tokens pertencem ao módulo `auth`
 - [ ] Hash de senha com Argon2id usando biblioteca consolidada (sem criptografia própria)
-- [ ] `POST /api/v1/auth/register`, `POST /api/v1/auth/login`, `POST /api/v1/auth/logout`
+- [ ] `POST /api/v1/auth/register`, `POST /api/v1/auth/login`, `POST /api/v1/auth/refresh`, `POST /api/v1/auth/logout`; os demais fluxos de autenticação (sessões, verificação de e-mail, recuperação de senha) também ficam sob `/api/v1/auth/`
 - [ ] Access token de curta duração (~15 min) enviado no header `Authorization`
 - [ ] Refresh token opaco em cookie `HttpOnly`, `Secure`, `SameSite=Strict`, restrito ao path de auth
 - [ ] Sessões persistidas no banco, com o refresh token guardado só como hash
-- [ ] Rotação do refresh token a cada uso, atômica (`UPDATE ... WHERE token_hash = :antigo AND revoked_at IS NULL RETURNING`), com detecção de reuso que revoga a família de sessões. Uma janela curta de tolerância aceita o token anterior por alguns segundos, evitando falso positivo quando duas abas renovam ao mesmo tempo
+- [ ] Rotação do refresh token a cada uso, atômica (`UPDATE ... WHERE token_hash = :antigo AND revoked_at IS NULL RETURNING`). Se o `UPDATE` não encontrar linha, o token é consultado: se foi rotacionado há poucos segundos (janela de tolerância), a requisição é aceita como renovação concorrente da mesma sessão (duas abas ao mesmo tempo) e recebe um novo access token; fora da janela, é reuso e a família de sessões é revogada. O tratamento do cookie nesse caso é definido na implementação
 - [ ] Access token carrega o ID da sessão, e a sessão é verificada como ativa a cada request (no mínimo nos endpoints de pagamento), para que a revogação tenha efeito imediato
 - [ ] Revogação de sessão: logout, logout de todos os dispositivos, listagem das sessões ativas
 - [ ] `GET /api/v1/users/me` e atualização do perfil
