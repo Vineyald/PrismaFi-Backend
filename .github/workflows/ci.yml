@@ -5,6 +5,10 @@ on:
   push:
     branches: [dev, hml, prod]
 
+# Read-only token: CI only checks out and tests code.
+permissions:
+  contents: read
+
 # A newer push to the same branch or PR cancels the run in progress.
 concurrency:
   group: ci-${{ github.ref }}
