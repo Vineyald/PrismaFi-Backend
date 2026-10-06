@@ -3,6 +3,7 @@ import os
 import subprocess
 import sys
 from collections.abc import Awaitable, Callable
+from pathlib import Path
 
 import pytest
 from sqlalchemy import NullPool, text
@@ -10,8 +11,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
 # Settings load at import time. Force them so a local .env cannot change test results.
 # Database-backed tests use TEST_DATABASE_URL (a throwaway database, migrated and truncated by
-# the `db` fixture); without it they are skipped. Other tests never open a real connection
-# (engine and Redis connect lazily), so a placeholder URL suffices.
+# the `db` fixture); without it they are skipped locally and fail in CI. Other tests never
+# open a real connection (engine and Redis connect lazily), so a placeholder URL suffices.
 TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL")
 
 os.environ["ENVIRONMENT"] = "development"
@@ -26,15 +27,21 @@ os.environ["JWT_SECRET"] = "test-secret-that-is-at-least-32-characters-long"
 @pytest.fixture(scope="session")
 def migrated_database() -> None:
     if TEST_DATABASE_URL is None:
+        if os.environ.get("CI"):
+            pytest.fail("TEST_DATABASE_URL must be set in CI")
         pytest.skip("TEST_DATABASE_URL is not set")
-    # A subprocess keeps Alembic's logging setup out of the test process.
-    result = subprocess.run(  # noqa: S603
-        [sys.executable, "-m", "alembic", "upgrade", "head"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert result.returncode == 0, result.stderr
+    # Up, down, up: every migration must be reversible. A subprocess keeps Alembic's logging
+    # setup out of the test process.
+    for target in ("head", "base", "head"):
+        command = "upgrade" if target == "head" else "downgrade"
+        result = subprocess.run(  # noqa: S603
+            [sys.executable, "-m", "alembic", command, target],
+            cwd=Path(__file__).parents[1],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode == 0, result.stderr
 
 
 def run_db[T](query: Callable[[AsyncSession], Awaitable[T]]) -> T:
