@@ -1,0 +1,51 @@
+[project]
+name = "prismafi-backend"
+version = "0.1.0"
+description = "PrismaFi API: FastAPI modular monolith"
+requires-python = ">=3.12"
+dependencies = [
+    "alembic>=1.20",
+    "asyncpg>=0.31",
+    "dramatiq[redis]>=2.2",
+    "fastapi>=0.142",
+    "pydantic>=2.13",
+    "pydantic-settings>=2.15",
+    "redis>=8.1",
+    "sqlalchemy[asyncio]>=2.1",
+    "uvicorn[standard]>=0.54",
+]
+
+[project.optional-dependencies]
+dev = [
+    "httpx>=0.28",  # FastAPI TestClient. Moves to runtime with the first outbound provider client.
+    "mypy>=2.4",
+    "pytest>=9.1",
+    "ruff>=0.16",
+]
+
+[build-system]
+requires = ["setuptools>=80"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+# pycodestyle, pyflakes, isort, pyupgrade, bugbear, async pitfalls, bandit (security).
+select = ["E", "F", "I", "UP", "B", "ASYNC", "S"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101"]
+# Empty generated migrations import op/sa without using them.
+"migrations/versions/**" = ["F401"]
+
+[tool.mypy]
+strict = true
+plugins = ["pydantic.mypy"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
