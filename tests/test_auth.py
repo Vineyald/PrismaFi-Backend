@@ -72,6 +72,7 @@ def test_register_with_taken_email_is_indistinguishable_and_keeps_the_account(
         ("password", "short"),
         ("password", "x" * 129),
         ("name", "   "),
+        ("name", "Ana\x00Souza"),
     ],
 )
 def test_register_rejects_invalid_input(client: TestClient, field: str, value: str) -> None:
@@ -138,3 +139,21 @@ def test_validation_errors_do_not_echo_submitted_values(client: TestClient) -> N
     assert response.headers["cache-control"] == "no-store"
     assert "my secret password" not in response.text
     assert response.json()["detail"][0]["loc"] == ["body", "password"]
+
+
+@pytest.mark.parametrize("email", ["not-an-email", "nobody@example.invalid"])
+def test_login_answers_any_unusable_email_with_the_same_401(client: TestClient, email: str) -> None:
+    response = client.post(LOGIN, json={"email": email, "password": PASSWORD})
+
+    assert response.status_code == 401
+    assert response.json() == {"detail": "Invalid email or password"}
+
+
+def test_passwords_match_across_unicode_normalization_forms(client: TestClient) -> None:
+    decomposed = "minha senha cafe\u0301 forte"  # e + combining acute accent
+    composed = "minha senha caf\u00e9 forte"
+    register(client, password=decomposed)
+
+    response = client.post(LOGIN, json={"email": "ana@example.com", "password": composed})
+
+    assert response.status_code == 200
