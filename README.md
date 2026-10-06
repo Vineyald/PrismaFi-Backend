@@ -248,8 +248,8 @@ Regras de entrada: `name` com 1 a 100 caracteres, sem caracteres de controle; `e
 **As respostas não revelam se um e-mail está cadastrado:**
 
 - O cadastro sempre responde `202` vazio. O hash da senha é calculado nos dois casos e o insert é um único `INSERT ... ON CONFLICT DO NOTHING`, então nem a resposta nem o tempo diferem; um cadastro com e-mail já existente não altera a conta.
-- O login responde o mesmo `401` para e-mail desconhecido e senha errada. Para e-mail desconhecido, uma senha é verificada contra um hash fictício, para o tempo ser o mesmo. O e-mail do login não passa pela validação de formato: qualquer e-mail que não consegue entrar recebe o mesmo `401`.
-- Senhas usam Argon2id (`argon2-cffi`, perfil RFC 9106 de baixa memória, 64 MiB por hash). No máximo 4 hashes rodam ao mesmo tempo, fora do event loop.
+- O login responde o mesmo `401` para e-mail desconhecido e senha errada. Para e-mail desconhecido, uma senha é verificada contra um hash fictício, para o tempo ser o mesmo. O e-mail do login é normalizado como no cadastro (NFC, domínio em Unicode), mas um formato inválido não gera `422`: qualquer e-mail que não consegue entrar recebe o mesmo `401`.
+- Senhas usam Argon2id (`argon2-cffi`, perfil RFC 9106 de baixa memória, 64 MiB por hash). Os hashes rodam num pool próprio de 4 threads, fora do event loop: no máximo 4 ao mesmo tempo (256 MiB), e o pool padrão de threads fica livre.
 - O access token é um JWT HS256 de 15 minutos com `sub` (ID do usuário), `iat` e `exp`. Ele ainda não é consumido por nenhum endpoint. A sessão no banco, o refresh token em cookie e a revogação são as próximas entregas da Fase 1; com elas, o token ganha o ID da sessão (`sid`) e as claims `iss`/`aud`/`typ`.
 
 ## Qualidade
@@ -303,7 +303,7 @@ Obrigatórias para todo código futuro.
 
 - As dependências usam versão mínima (`>=`) sem lock file, então os builds não são totalmente reproduzíveis. Adicionar um lock (ex.: `uv lock` ou `pip-compile --generate-hashes`) antes de CI e produção; planejado para a Fase 1.
 - `/api/health` não exige autenticação e acessa banco e Redis. Antes de um deploy público, aplicar rate limit no reverse proxy ou separá-lo em liveness pública e readiness interna (Fase 9).
-- Login e cadastro ainda não têm rate limit (próxima entrega da Fase 1). **Antes de qualquer deploy público**, eles precisam dele: sem limite, ficam abertos a força bruta e cada request custa um hash Argon2 de 64 MiB (o semáforo de 4 hashes protege a memória, mas não a fila).
+- Login e cadastro ainda não têm rate limit (próxima entrega da Fase 1). **Antes de qualquer deploy público**, eles precisam dele: sem limite, ficam abertos a força bruta e cada request custa um hash Argon2 de 64 MiB (o pool de 4 threads protege a memória, mas não a fila).
 - Sem verificação de e-mail, qualquer pessoa pode cadastrar um e-mail que não é dela antes do dono real (pre-hijacking). A verificação de e-mail da Fase 1 resolve isso.
 - As actions do CI usam tags de versão (`@v7`), não SHAs fixos. Fixar por SHA, com Dependabot para atualizar, junto com o lock file.
 - O serviço `api` do Compose leva cerca de 10s para parar e termina com código 137: o comando roda via `sh -c`, que não repassa o SIGTERM ao uvicorn. Não afeta o funcionamento em desenvolvimento.
