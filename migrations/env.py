@@ -6,10 +6,10 @@ from sqlalchemy import pool
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import create_async_engine
 
+# Import every module's models here so autogenerate sees their tables.
+import app.modules.users.models  # noqa: F401
 from app.core.config import settings
 from app.core.database import Base
-
-# Import every module's models here so autogenerate sees their tables.
 
 config = context.config
 if config.config_file_name is not None:
