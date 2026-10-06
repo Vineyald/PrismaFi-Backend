@@ -1,6 +1,7 @@
 import unicodedata
 from typing import Annotated, Any, Literal
 
+from email_validator import EmailNotValidError, validate_email
 from pydantic import BaseModel, BeforeValidator, EmailStr, Field, StringConstraints
 
 # NIST SP 800-63B: length over composition rules. The upper bound caps hashing cost.
@@ -13,9 +14,24 @@ def _normalize_email(value: Any) -> Any:
     return value.strip().lower() if isinstance(value, str) else value
 
 
+def _login_email(value: Any) -> Any:
+    """The form registration stores (EmailStr output: NFC, Unicode domain), or "" for an invalid
+    address. No account has "", so login skips the lookup and answers the usual 401."""
+    if not isinstance(value, str):
+        return value
+    if len(value) > EMAIL_MAX_LENGTH:
+        return ""
+    try:
+        return validate_email(_normalize_email(value), check_deliverability=False).normalized
+    except EmailNotValidError:
+        return ""
+
+
 def _normalize_password(value: Any) -> Any:
     # NFKC: the same visible password ("é" composed or decomposed) hashes the same way on every
-    # device. Changing this later would invalidate existing hashes.
+    # device. Changing this later would invalidate existing hashes. Length limits apply to the
+    # normalized text, so rare inputs (ligatures, combining marks) may count differently than the
+    # frontend's character count; the 422 then shows as a field error.
     return unicodedata.normalize("NFKC", value) if isinstance(value, str) else value
 
 
@@ -37,13 +53,8 @@ class RegisterRequest(BaseModel):
 
 
 class LoginRequest(BaseModel):
-    # Plain string, not EmailStr: any email that cannot sign in gets the same 401, whatever its
-    # format. Normalized like registration so lookups match.
-    email: Annotated[
-        str,
-        BeforeValidator(_normalize_email),
-        StringConstraints(min_length=1, max_length=EMAIL_MAX_LENGTH),
-    ]
+    # Not EmailStr: any email that cannot sign in gets the same 401, whatever its format.
+    email: Annotated[str, BeforeValidator(_login_email)]
     # No minimum: login never reveals the password policy, only that credentials are invalid.
     password: Annotated[Password, Field(min_length=1, max_length=PASSWORD_MAX_LENGTH)]
 

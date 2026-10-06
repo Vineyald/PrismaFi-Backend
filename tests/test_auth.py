@@ -141,7 +141,7 @@ def test_validation_errors_do_not_echo_submitted_values(client: TestClient) -> N
     assert response.json()["detail"][0]["loc"] == ["body", "password"]
 
 
-@pytest.mark.parametrize("email", ["not-an-email", "nobody@example.invalid"])
+@pytest.mark.parametrize("email", ["not-an-email", "nobody@example.invalid", "ana\x00@example.com"])
 def test_login_answers_any_unusable_email_with_the_same_401(client: TestClient, email: str) -> None:
     response = client.post(LOGIN, json={"email": email, "password": PASSWORD})
 
@@ -155,5 +155,13 @@ def test_passwords_match_across_unicode_normalization_forms(client: TestClient) 
     register(client, password=decomposed)
 
     response = client.post(LOGIN, json={"email": "ana@example.com", "password": composed})
+
+    assert response.status_code == 200
+
+
+def test_login_matches_the_email_in_any_unicode_form(client: TestClient) -> None:
+    register(client, email="jos\u00e9@example.com")  # composed e-acute
+
+    response = client.post(LOGIN, json={"email": "JOSE\u0301@example.com", "password": PASSWORD})
 
     assert response.status_code == 200

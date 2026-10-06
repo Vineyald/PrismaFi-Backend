@@ -1,5 +1,6 @@
 import asyncio
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 
 import jwt
@@ -21,9 +22,10 @@ _hasher = PasswordHasher()
 # Verified when the email is unknown, so a login takes the same time whether or not the
 # account exists.
 _DUMMY_HASH = _hasher.hash("prismafi-dummy-password")
-# Caps concurrent hashes so a burst of auth requests cannot exhaust memory or the default
-# thread pool; extra requests wait their turn. Rate limiting (next deliverable) cuts the burst.
-_hash_slots = asyncio.Semaphore(4)
+# Argon2 runs on its own 4 threads: at most 4 hashes (256 MiB) at once, even when requests are
+# cancelled mid-hash, and the default thread pool stays free. Extra requests queue. Rate limiting
+# (next deliverable) cuts the burst itself.
+_hash_pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="argon2")
 
 
 class InvalidCredentialsError(Exception):
@@ -31,16 +33,15 @@ class InvalidCredentialsError(Exception):
 
 
 async def _hash(password: str) -> str:
-    async with _hash_slots:
-        return await asyncio.to_thread(_hasher.hash, password)
+    return await asyncio.get_running_loop().run_in_executor(_hash_pool, _hasher.hash, password)
 
 
 async def _verify(password_hash: str, password: str) -> bool:
-    async with _hash_slots:
-        try:
-            return await asyncio.to_thread(_hasher.verify, password_hash, password)
-        except VerifyMismatchError:
-            return False
+    loop = asyncio.get_running_loop()
+    try:
+        return await loop.run_in_executor(_hash_pool, _hasher.verify, password_hash, password)
+    except VerifyMismatchError:
+        return False
 
 
 async def register(session: AsyncSession, data: RegisterRequest) -> None:
@@ -62,8 +63,10 @@ async def register(session: AsyncSession, data: RegisterRequest) -> None:
 async def login(data: LoginRequest) -> str:
     """Return an access token, or raise InvalidCredentialsError for any bad email/password."""
     # Own short session: the connection returns to the pool before the slow hash check.
-    async with SessionLocal() as session:
-        user = await session.scalar(select(User).where(User.email == data.email))
+    user = None
+    if data.email:  # "" means an invalid address: no account can match it
+        async with SessionLocal() as session:
+            user = await session.scalar(select(User).where(User.email == data.email))
     valid = await _verify(user.password_hash if user else _DUMMY_HASH, data.password)
     if user is None or not valid:
         raise InvalidCredentialsError
