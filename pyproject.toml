@@ -5,11 +5,13 @@ description = "PrismaFi API: FastAPI modular monolith"
 requires-python = ">=3.12"
 dependencies = [
     "alembic>=1.20",
+    "argon2-cffi>=25.1",
     "asyncpg>=0.31",
     "dramatiq[redis]>=2.2",
     "fastapi>=0.142",
-    "pydantic>=2.13",
+    "pydantic[email]>=2.13",
     "pydantic-settings>=2.15",
+    "pyjwt>=2.15",
     "redis>=8.1",
     "sqlalchemy[asyncio]>=2.1",
     "uvicorn[standard]>=0.54",
@@ -39,7 +41,8 @@ line-length = 100
 select = ["E", "F", "I", "UP", "B", "ASYNC", "S"]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["S101"]
+# S105/S106: test fixtures hold fake passwords and secrets.
+"tests/**" = ["S101", "S105", "S106"]
 # Empty generated migrations import op/sa without using them.
 "migrations/versions/**" = ["F401"]
 

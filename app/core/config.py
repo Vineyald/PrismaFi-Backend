@@ -1,6 +1,6 @@
 from typing import Literal
 
-from pydantic import PostgresDsn, RedisDsn
+from pydantic import Field, PostgresDsn, RedisDsn, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -19,6 +19,9 @@ class Settings(BaseSettings):
     # Required: the app refuses to start without them.
     database_url: PostgresDsn
     redis_url: RedisDsn
+    # Signs access tokens (HS256). Generate with:
+    # python -c "import secrets; print(secrets.token_urlsafe(48))"
+    jwt_secret: SecretStr = Field(min_length=32)
 
     # Browser origins allowed to call the API cross-origin. Empty disables CORS,
     # which is the default because the frontend reaches the API same-origin (dev proxy).

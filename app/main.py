@@ -10,6 +10,7 @@ from app import health
 from app.core.config import settings
 from app.core.database import engine
 from app.core.redis import redis
+from app.modules.auth.router import router as auth_router
 
 logging.basicConfig(
     level=settings.log_level,
@@ -55,3 +56,4 @@ async def unhandled_exception_handler(_: Request, __: Exception) -> JSONResponse
 
 
 app.include_router(health.router, prefix="/api")
+app.include_router(auth_router, prefix="/api/v1")
